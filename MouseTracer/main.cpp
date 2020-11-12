@@ -18,7 +18,6 @@ typedef struct
 typedef struct
 {
     Point p;
-    int col;
 } ThreadParam;
 
 
@@ -141,9 +140,8 @@ auto pointController = [] {
         RedrawPoints(X, Y);
         ThreadParam param;
         param.p = Points[i];
-        param.col = TRN;
         enq(&q, param);
-        CreateThread(NULL, 0, RemovePoint, LPVOID(NULL), 0, NULL);
+        CreateThread(NULL, 0, RemovePoint, NULL, 0, NULL);
 
         Points[i] = { X, Y };
         DrawPoint(Points[i], pointCol);
@@ -155,7 +153,6 @@ DWORD WINAPI RemovePoint(LPVOID lParam)
 {
     ThreadParam param = deq(&q);
     Point p = param.p;
-    int col = param.col;
 
     Sleep(sleepTime);
     WaitForSingleObject(hMutex, INFINITE);
@@ -166,15 +163,6 @@ DWORD WINAPI RemovePoint(LPVOID lParam)
 
             int X = i + p.X;
             int Y = j + p.Y;
-
-            if (X < 0)
-                X = 0;
-            if (X > WIDTH - 1)
-                X = WIDTH - 1;
-            if (Y < 0)
-                Y = 0;
-            if (Y > HEIGHT - 1)
-                Y = HEIGHT - 1;
 
             if (pointTable[X][Y] > 0)
             {
@@ -201,15 +189,6 @@ void DrawPoint(Point p, int col)
             int X = i + p.X;
             int Y = j + p.Y;
 
-            if (X < 0)
-                X = 0;
-            if (X > WIDTH - 1)
-                X = WIDTH - 1;
-            if (Y < 0)
-                Y = 0;
-            if (Y > HEIGHT - 1)
-                Y = HEIGHT - 1;
-
             if (col != TRN)
             {
                 pointTable[X][Y]++;
@@ -223,7 +202,6 @@ void DrawPoint(Point p, int col)
             }
             if (pointTable[X][Y] == 0)
             {
-
                 SetPixelV(hdc, X, Y, col);
             }
         }
@@ -243,7 +221,7 @@ void RedrawPoints(int X, int Y)
     }
 }
 
-//スキップしたRawInputの移動量を保存
+//スキップしたRawInputのノルムを保存
 int bufX,bufY = 0;
 char i = 0;
 void OnRawInput(HRAWINPUT hRawInput)
@@ -270,7 +248,7 @@ void OnRawInput(HRAWINPUT hRawInput)
         HANDLE deviceHandle = raw->header.hDevice;
         const RAWMOUSE& mouseData = raw->data.mouse;
 
-        //Pointの描画を125hzに固定する
+        //描画を125hzに固定する
         i++;
         if (i != 8 * hz / 1000)
         {
@@ -279,7 +257,7 @@ void OnRawInput(HRAWINPUT hRawInput)
             return;
         }
 
-        //Y座標のブレを強調したいためX座標を2で除している
+        //縦方向のブレを強調したいためXを2で除している
         int X = (mouseData.lLastX + bufX) * 1 / 2 * -1;
         int Y = (mouseData.lLastY + bufY) * -1;
         //描画毎のノルムを制限する
