@@ -1,5 +1,4 @@
-#define D3D_DEBUG_INFO	// Direct3Dデバックフラグ
-#define DOTBUF 28
+#define POINTBUF 28
 #define TRN 0xFFFFFF
 #define WIDTH 1920
 #define HEIGHT 1080
@@ -7,57 +6,56 @@
 #define _CRT_SECURE_NO_WARNINGS
 
 #include <windows.h>
-#include <stdio.h>
 #include <tchar.h>
 #include <vector>
-#include<string>
-
-using namespace std;
-int centerOfX;
-int centerOfY;
-int dotCol;
-int hz = 1000;
-int sleepTime = 1000;
-char table[WIDTH][HEIGHT];
 
 typedef struct
 {
     int X;
     int Y;
-} Dot;
+} Point;
 
-typedef struct _ThreadParam
+typedef struct
 {
-    Dot d;
+    Point p;
     int col;
 } ThreadParam;
 
-Dot Dots[DOTBUF];
+
 typedef struct
 {
-    ThreadParam tps[10];
+    ThreadParam params[10];
     int head;
     int tail;
 } Queue;
 
-void DrawPoint(Dot d, int col);
-void RedrawPoints(int X, int Y);
-LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
-DWORD WINAPI ThreadRemovePoint(LPVOID lParam);
-HANDLE hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
-int readConfig();
-TCHAR szClassName[] = _T("MouseTracer");
-
+using namespace std;
 HWND hWnd;
 HDC hdc;
 RAWINPUTDEVICE device;
 vector<char> rawInputMessageData;
+HANDLE hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
+Point Points[POINTBUF];
 Queue q;
-char keys[10][10] = {"R", "G","B","Hz"};
+int centerOfX;
+int centerOfY;
+int pointCol;
+//マウスのポーリングレート
+int hz = 1000;
+//Pointが消えるまでの時間(ms)
+int sleepTime = 650;
+//Pointの重なりを管理するための配列
+char pointTable[WIDTH][HEIGHT];
 
-void enq(Queue* q, ThreadParam tp)
+DWORD WINAPI RemovePoint(LPVOID lParam);
+void DrawPoint(Point p, int col);
+void RedrawPoints(int X, int Y);
+LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+int readConfig();
+
+void enq(Queue* q, ThreadParam param)
 {
-    q->tps[q->tail] = tp;
+    q->params[q->tail] = param;
     q->tail++;
     if (q->tail == 10)
     {
@@ -67,7 +65,7 @@ void enq(Queue* q, ThreadParam tp)
 
 ThreadParam deq(Queue* q)
 {
-    ThreadParam param = q->tps[q->head];
+    ThreadParam param = q->params[q->head];
     q->head++;
     if (q->head == 10)
     {
@@ -76,15 +74,18 @@ ThreadParam deq(Queue* q)
     return param;
 }
 
-void init(int w, int h)
+void init(HWND hWnd)
 {
-    centerOfX = (w) / 2;
-    centerOfY = (h) / 2;
+    RECT rc;
+    GetClientRect(hWnd, &rc);
+    centerOfX = rc.right / 2;
+    centerOfY = rc.bottom / 2;
+
     for (int i = 0; i < WIDTH; i++)
     {
         for (int j = 0; j < HEIGHT; j++)
         {
-            table[i][j] = 0;
+            pointTable[i][j] = 0;
         }
     }
     readConfig();
@@ -92,9 +93,10 @@ void init(int w, int h)
 
 int readConfig() {
     int R, G, B;
+    char keys[10][10] = { "R", "G","B","Hz" };
     FILE* fp = NULL;
     char line[256];
-    fopen_s(&fp,"config.txt","r");
+    fopen_s(&fp, "config.txt", "r");
     if (fp == NULL) return -1;
     while (fgets(line, 256, fp) != NULL)
     {
@@ -102,9 +104,9 @@ int readConfig() {
         int value;
         if (line[0] == '#') continue;
         for (int i = 0; sizeof(line) / sizeof(line[0]); i++) {
-            if (line[i] == '=') 
-            { 
-                line[i] = ' '; 
+            if (line[i] == '=')
+            {
+                line[i] = ' ';
                 break;
             }
         }
@@ -125,38 +127,34 @@ int readConfig() {
             sleepTime = value;
         }
     }
-    dotCol = RGB(R, G, B);
+    pointCol = RGB(R, G, B);
     fclose(fp);
     return 0;
 }
 
-auto DotController = [] {
+auto pointController = [] {
+    //Pointsの要素を指定するためのイテレータ
     int i = 0;
-    bool flag = false;
     return [=](int X, int Y) mutable -> void {
-        if (i == DOTBUF)
-        {
-            i = 0;
-            flag = true;
-        }
-        RedrawPoints(X, Y);
+        if (i == POINTBUF) i = 0;
 
+        RedrawPoints(X, Y);
         ThreadParam param;
-        param.d = Dots[i];
+        param.p = Points[i];
         param.col = TRN;
         enq(&q, param);
-        CreateThread(NULL, 0, ThreadRemovePoint, LPVOID(NULL), 0, NULL);
+        CreateThread(NULL, 0, RemovePoint, LPVOID(NULL), 0, NULL);
 
-        Dots[i] = { X, Y };
-        DrawPoint(Dots[i], dotCol);
+        Points[i] = { X, Y };
+        DrawPoint(Points[i], pointCol);
         i++;
     };
 }();
 
-DWORD WINAPI ThreadRemovePoint(LPVOID lParam)
+DWORD WINAPI RemovePoint(LPVOID lParam)
 {
     ThreadParam param = deq(&q);
-    Dot d = param.d;
+    Point p = param.p;
     int col = param.col;
 
     Sleep(sleepTime);
@@ -166,8 +164,8 @@ DWORD WINAPI ThreadRemovePoint(LPVOID lParam)
         for (int j = -1; j < 2; j++)
         {
 
-            int X = i + d.X;
-            int Y = j + d.Y;
+            int X = i + p.X;
+            int Y = j + p.Y;
 
             if (X < 0)
                 X = 0;
@@ -178,12 +176,12 @@ DWORD WINAPI ThreadRemovePoint(LPVOID lParam)
             if (Y > HEIGHT - 1)
                 Y = HEIGHT - 1;
 
-            if (table[X][Y] > 0)
+            if (pointTable[X][Y] > 0)
             {
-                table[X][Y]--;
+                pointTable[X][Y]--;
             }
 
-            if (table[X][Y] == 0)
+            if (pointTable[X][Y] == 0)
             {
                 SetPixelV(hdc, X, Y, TRN);
             }
@@ -193,15 +191,15 @@ DWORD WINAPI ThreadRemovePoint(LPVOID lParam)
     return TRUE;
 }
 
-void DrawPoint(Dot d, int col)
+void DrawPoint(Point p, int col)
 {
     WaitForSingleObject(hMutex, INFINITE);
     for (int i = -1; i < 2; i++)
     {
         for (int j = -1; j < 2; j++)
         {
-            int X = i + d.X;
-            int Y = j + d.Y;
+            int X = i + p.X;
+            int Y = j + p.Y;
 
             if (X < 0)
                 X = 0;
@@ -214,16 +212,16 @@ void DrawPoint(Dot d, int col)
 
             if (col != TRN)
             {
-                table[X][Y]++;
+                pointTable[X][Y]++;
                 SetPixelV(hdc, X, Y, col);
                 continue;
             }
 
-            if (table[X][Y] > 0)
+            if (pointTable[X][Y] > 0)
             {
-                table[X][Y]--;
+                pointTable[X][Y]--;
             }
-            if (table[X][Y] == 0)
+            if (pointTable[X][Y] == 0)
             {
 
                 SetPixelV(hdc, X, Y, col);
@@ -235,18 +233,18 @@ void DrawPoint(Dot d, int col)
 
 void RedrawPoints(int X, int Y)
 {
-    for (int i = 0; i < DOTBUF; i++)
+    for (int i = 0; i < POINTBUF; i++)
     {
-        if (Dots[i].X == 0) continue;
-        DrawPoint(Dots[i], TRN);
-        Dots[i].X += X - centerOfX;
-        Dots[i].Y += Y - centerOfY;
-        DrawPoint(Dots[i], dotCol);
+        if (Points[i].X == 0) continue;
+        DrawPoint(Points[i], TRN);
+        Points[i].X += X - centerOfX;
+        Points[i].Y += Y - centerOfY;
+        DrawPoint(Points[i], pointCol);
     }
 }
 
-int bufX = 0;
-int bufY = 0;
+//スキップしたRawInputの移動量を保存
+int bufX,bufY = 0;
 char i = 0;
 void OnRawInput(HRAWINPUT hRawInput)
 {
@@ -271,6 +269,8 @@ void OnRawInput(HRAWINPUT hRawInput)
     {
         HANDLE deviceHandle = raw->header.hDevice;
         const RAWMOUSE& mouseData = raw->data.mouse;
+
+        //Pointの描画を125hzに固定する
         i++;
         if (i != 8 * hz / 1000)
         {
@@ -278,32 +278,23 @@ void OnRawInput(HRAWINPUT hRawInput)
             bufY += mouseData.lLastY;
             return;
         }
+
+        //Y座標のブレを強調したいためX座標を2で除している
         int X = (mouseData.lLastX + bufX) * 1 / 2 * -1;
-        int Y = (mouseData.lLastY + bufY) * 1 / 1 * -1;
-        int d = 10;
-        if (X > d) X = d;
-        if (X < -d) X = -d;
-        if (Y > d) Y = d;
-        if (Y < -d) Y = -d;
-     
-        DotController(centerOfX + X, centerOfY + Y);
+        int Y = (mouseData.lLastY + bufY) * -1;
+        //描画毎のノルムを制限する
+        int max = 10;
+        if (X > max) X = max;
+        if (X < -max) X = -max;
+        if (Y > max) Y = max;
+        if (Y < -max) Y = -max;
+
+        pointController(centerOfX + X, centerOfY + Y);
         i = 0;
         bufX = 0;
         bufY = 0;
     }
     return;
-}
-
-static VOID funcSetClientSize(HWND hWnd, LONG sx, LONG sy)
-{
-    RECT rc1;
-    RECT rc2;
-
-    GetWindowRect(hWnd, &rc1);
-    GetClientRect(hWnd, &rc2);
-    sx += ((rc1.right - rc1.left) - (rc2.right - rc2.left));
-    sy += ((rc1.bottom - rc1.top) - (rc2.bottom - rc2.top));
-    SetWindowPos(hWnd, NULL, 0, 0, sx, sy, (SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_NOMOVE));
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -320,10 +311,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         device.hwndTarget = hWnd;         //dwFlagsがRIDEV_INPUTSINKの場合は0にしてはいけない
         RegisterRawInputDevices(&device, 1, sizeof device);
         SetLayeredWindowAttributes(hWnd, TRN, 0, LWA_COLORKEY);
-        funcSetClientSize(hWnd, WIDTH, HEIGHT);
-        RECT rc;
-        GetClientRect(hWnd, &rc);
-        init(rc.right, rc.bottom);
+        init(hWnd);
         hdc = GetDC(hWnd);
         break;
     case WM_DESTROY:
@@ -345,6 +333,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPreInst, LPSTR lpszCmdLine, i
 {
     MSG msg;
     WNDCLASS myProg;
+    TCHAR szClassName[] = _T("MouseTracer");
     if (!hPreInst)
     {
         myProg.style = CS_HREDRAW | CS_VREDRAW;
